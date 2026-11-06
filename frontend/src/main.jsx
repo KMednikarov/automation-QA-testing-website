@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Moon,
+  Sun,
   BarChart3,
   Database,
   FileText,
@@ -75,7 +77,48 @@ function Brand() {
     </div>
   );
 }
+function ThemeToggle({ theme, toggle }) {
+  const dark = theme === "dark";
+  return (
+    <button
+      className="secondary theme-toggle"
+      type="button"
+      aria-label={`Switch to ${dark ? "light" : "dark"} theme`}
+      aria-pressed={dark}
+      onClick={toggle}
+    >
+      {dark ? <Sun size={16} /> : <Moon size={16} />}
+      <span>{dark ? "Light" : "Dark"}</span>
+    </button>
+  );
+}
+
 function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem("atlas-theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      // The toggle still works when browser storage is unavailable.
+    }
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  });
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("atlas-theme", theme);
+    } catch {
+      // Theme changes remain available for this visit.
+    }
+  }, [theme]);
+  const themeToggle = (
+    <ThemeToggle
+      theme={theme}
+      toggle={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+    />
+  );
   const [token, setToken] = useState(
       sessionStorage.getItem("atlas-token") || "",
     ),
@@ -284,9 +327,12 @@ function App() {
           <small>ATLAS / QA LEARNING LAB</small>
         </section>
         <section className="login-form">
-          <span className="pill">
-            <FlaskConical size={14} /> Training environment
-          </span>
+          <div className="login-tools">
+            <span className="pill">
+              <FlaskConical size={14} /> Training environment
+            </span>
+            {themeToggle}
+          </div>
           <h2>Welcome to Atlas</h2>
           <p className="muted">Sign in and start exploring your data.</p>
           {messages}
@@ -419,6 +465,7 @@ function App() {
                 : "Clean mode"}
             </span>
             <small>2026 SAMPLE DATA</small>
+            {themeToggle}
           </div>
         </header>
         <main>
