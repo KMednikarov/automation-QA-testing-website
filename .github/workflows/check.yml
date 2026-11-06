@@ -15,3 +15,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: bash scripts/setup.sh
       - run: .venv/bin/python -m pytest backend/tests -q
+      - run: .venv/bin/python -m pip install -r backend/requirements-browser.txt
+      - run: .venv/bin/python -m playwright install --with-deps chromium
+      - run: .venv/bin/python scripts/check_ui_defects.py

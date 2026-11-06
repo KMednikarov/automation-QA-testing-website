@@ -1444,3 +1444,28 @@ td {
     padding: 7px;
   }
 }
+.defect-group-heading {
+  padding: 20px 24px;
+  background: var(--subtle);
+  border-top: 1px solid var(--border);
+}
+.defect {
+  gap: 20px;
+}
+.defect details {
+  margin-top: 12px;
+  font-size: 12px;
+  max-width: 740px;
+}
+.defect summary {
+  cursor: pointer;
+  color: inherit;
+}
+.defect details p {
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .shell[data-hide-export="true"] .report-export {
+    display: none;
+  }
+}

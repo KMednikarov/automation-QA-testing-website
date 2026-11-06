@@ -1,0 +1,2 @@
+# Optional: installs the runner for scripts/check_ui_defects.py.
+playwright==1.62.0

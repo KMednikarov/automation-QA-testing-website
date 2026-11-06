@@ -1,6 +1,6 @@
 # Atlas · Data training portal
 
-A small, working sales analytics website for UI automation and API testing training. React + Vite, FastAPI, and SQLite. All data is fictional. Includes dashboards, sales CRUD, saved reports, CSV exports, eight API learning chapters, and three deliberately selectable defects.
+A small, working sales analytics website for UI automation and API testing training. React + Vite, FastAPI, and SQLite. All data is fictional. Includes dashboards, sales CRUD, saved reports, CSV exports, eight API learning chapters, and 20 deliberately selectable defects (10 API and 10 UI).
 
 ## Run locally
 
@@ -36,7 +36,7 @@ Vite proxies `/api`, `/docs`, and `/openapi.json` to the backend. Rebuild the fr
 
 On first startup, SQLite is created at `backend/atlas.sqlite3` with 120 sales dated January 1–April 30, 2026, three users, and two saved reports. The data persists across restarts. Override the database path with `ATLAS_DB_PATH`; choose a separate path per learner/team instance. `PORT` changes the combined server's port.
 
-Clean mode is the default. Administrators can enable individual defects in **Instructor lab**. The lab also resets the database after an explicit typed confirmation. Reset deletes all custom records, resets defect settings, restores practice accounts, and revokes **all** sessions. Defect settings and data are shared by everyone on an instance. Learners can inspect mode through `/api/training`; this is a teaching exercise, not a hidden assessment system.
+Clean mode is the default. Administrators can enable 10 API defects and 10 UI defects independently in **Instructor lab**, with reproduction steps and expected results beside each switch. New flags are added to existing databases automatically, disabled by default. The lab also resets the database after an explicit typed confirmation. Reset deletes all custom records, resets defect settings, restores practice accounts, and revokes **all** sessions. Defect settings and data are shared by everyone on an instance. Learners can inspect mode through `/api/training`; this is a teaching exercise, not a hidden assessment system.
 
 [Training chapters and expected behavior](docs/training.md) · [Instructor defect catalogue](docs/instructor.md)
 
@@ -47,9 +47,17 @@ Clean mode is the default. Administrators can enable individual defects in **Ins
 npm run build --prefix frontend
 ```
 
-API tests use a fresh temporary database for each test and do not alter the running training database. They verify authentication, roles, CRUD, input boundaries, pagination, aggregates, report ownership, CSV contents, formula escaping, reset, and every intentional defect. CI runs this suite and the frontend build.
+API tests use a fresh temporary database for each test and do not alter the running training database. They verify authentication, roles, CRUD, input boundaries, pagination, aggregates, report ownership, CSV contents, formula escaping, reset, and all ten API defects in clean, enabled, and restored states. Tests also verify all 20 settings, reset, partial updates, and upgrades from older databases. CI runs this suite, the frontend build, and the browser defect checks below.
 
-The initial implementation was also checked in Chromium for login, dashboards, sale creation, report create/edit/export/delete, defect toggling, reset, role switching, and a 390px mobile viewport. Browser smoke checks are manual validation, separate from the committed API test suite.
+Optional browser verification (requires Chromium and Playwright):
+
+```bash
+.venv/bin/python -m pip install -r backend/requirements-browser.txt
+.venv/bin/python -m playwright install chromium
+.venv/bin/python scripts/check_ui_defects.py
+```
+
+On Windows, replace `.venv/bin/python` with `.\.venv\Scripts\python.exe`. The browser runner starts its own temporary server/database and checks every UI challenge in clean, enabled, and restored modes. It never resets the running training database. Set `CHROMIUM_PATH` to use an existing compatible Chromium executable instead of downloading one. Run `playwright install --with-deps chromium` on Linux if browser system libraries are missing.
 
 ## API example
 

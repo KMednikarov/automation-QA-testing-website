@@ -15,14 +15,11 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, create_model
 
 DB_PATH = os.environ.get('ATLAS_DB_PATH', str(Path(__file__).with_name('atlas.sqlite3')))
-DEFECTS = {
-    'exclude_end_date': 'Date filters exclude the last day instead of including it.',
-    'ignore_discounts': 'Dashboard revenue uses gross sales instead of net revenue.',
-    'report_permissions': 'Analysts can delete reports owned by another user.',
-}
+from backend.defects import DEFECTS, DEFECT_CATALOGUE
+
 app = FastAPI(title='Atlas Training API', version='1.0.0', description='Sales analytics for UI and API testing. Training-only accounts and synthetic data. See /api/training for the active defect settings.')
 security = HTTPBearer(auto_error=False)
 
@@ -72,6 +69,8 @@ def initialize():
         ''')
         if not c.execute('SELECT 1 FROM users').fetchone():
             seed(c)
+        # Add newly introduced flags without changing existing data or settings.
+        c.executemany('INSERT OR IGNORE INTO settings VALUES (?,0)', [(key,) for key in DEFECTS])
 
 initialize()
 
@@ -162,7 +161,12 @@ def enrich(row):
 def sales(f: Filters=Depends(filters), page:int=Query(1,ge=1), page_size:int=Query(10,ge=1,le=100),user=Depends(current_user)):
     with db() as c:
         rows = select_sales(c,f)
-    return {'items':[enrich(r) for r in rows[(page-1)*page_size:page*page_size]],'total':len(rows),'page':page,'page_size':page_size}
+        flags = settings(c)
+        total = c.execute('SELECT COUNT(*) FROM sales').fetchone()[0] if flags['wrong_filtered_total'] else len(rows)
+    offset = (page-1)*page_size
+    if flags['pagination_overlap'] and page > 1:
+        offset -= 1
+    return {'items':[enrich(r) for r in rows[offset:offset+page_size]],'total':total,'page':page,'page_size':page_size}
 
 class SaleInput(StrictModel):
     date: date
@@ -183,12 +187,18 @@ def create_sale(data: SaleInput,user=Depends(admin)):
 def get_sale(sale_id:int,user=Depends(current_user)):
     with db() as c:
         row=c.execute('SELECT * FROM sales WHERE id=?',(sale_id,)).fetchone()
-    if not row: raise HTTPException(404,'Sale not found')
+    if not row:
+        with db() as c:
+            if settings(c)['missing_sale_success']: return {}
+        raise HTTPException(404,'Sale not found')
     return enrich(dict(row))
 
 @app.put('/api/sales/{sale_id}',tags=['Sales'])
 def update_sale(sale_id:int,data:SaleInput,user=Depends(admin)):
     with db() as c:
+        if settings(c)['sale_update_ignored_discount']:
+            old = c.execute('SELECT discount FROM sales WHERE id=?', (sale_id,)).fetchone()
+            if old: data = data.model_copy(update={'discount': old['discount']})
         result=c.execute('UPDATE sales SET date=?,customer=?,region=?,product=?,quantity=?,unit_price=?,discount=? WHERE id=?',(*data.model_dump(mode='json').values(),sale_id))
         if not result.rowcount: raise HTTPException(404,'Sale not found')
         return enrich(dict(c.execute('SELECT * FROM sales WHERE id=?',(sale_id,)).fetchone()))
@@ -203,12 +213,13 @@ def delete_sale(sale_id:int,user=Depends(admin)):
 def dashboard(f:Filters=Depends(filters),user=Depends(current_user)):
     with db() as c:
         rows=select_sales(c,f)
-        buggy=settings(c)['ignore_discounts']
+        flags=settings(c)
+        buggy=flags['ignore_discounts']
     revenue=lambda r: r['quantity']*r['unit_price'] if buggy else net(r)
     by_region={r:round(sum(revenue(x) for x in rows if x['region']==r),2) for r in ('Europe','North America','Asia Pacific','Latin America')}
     months=sorted(set(r['date'][:7] for r in rows))
     total=round(sum(revenue(r) for r in rows),2)
-    return {'revenue':total,'orders':len(rows),'customers':len(set(r['customer'] for r in rows)),'average_order':round(total/len(rows),2) if rows else 0,'by_region':by_region,'monthly':[{'month':m,'revenue':round(sum(revenue(r) for r in rows if r['date'].startswith(m)),2)} for m in months]}
+    return {'revenue':total,'orders':len(rows),'customers':len(rows) if flags['customer_count_orders'] else len(set(r['customer'] for r in rows)),'average_order':round(total/len(rows),2) if rows else 0,'by_region':by_region,'monthly':[{'month':m,'revenue':round(sum(revenue(r) for r in rows if r['date'].startswith(m)),2)} for m in months]}
 
 class ReportInput(Filters):
     name: str = Field(min_length=1,max_length=100,pattern=r'.*\S.*')
@@ -228,8 +239,9 @@ def reports(user=Depends(current_user)):
         return [dict(r) for r in c.execute('SELECT r.*,u.name AS owner FROM reports r JOIN users u ON u.id=r.owner_id ORDER BY r.id DESC')]
 
 @app.post('/api/reports',status_code=201,tags=['Reports'])
-def create_report(data:ReportInput,user=Depends(current_user)):
+def create_report(data:ReportInput,response:Response,user=Depends(current_user)):
     with db() as c:
+        if settings(c)['report_create_wrong_status']: response.status_code = 200
         cursor=c.execute('INSERT INTO reports (name,region,start_date,end_date,owner_id,created_at) VALUES (?,?,?,?,?,?)',(data.name,data.region,str(data.start_date) if data.start_date else None,str(data.end_date) if data.end_date else None,user['id'],datetime.now(timezone.utc).isoformat()))
         return report_row(c,cursor.lastrowid)
 
@@ -256,7 +268,8 @@ def delete_report(report_id:int,user=Depends(current_user)):
 def export_report(report_id:int,user=Depends(current_user)):
     with db() as c:
         r=report_row(c,report_id)
-        rows=select_sales(c,Filters(region=r['region'],start_date=r['start_date'],end_date=r['end_date']))
+        region = None if settings(c)['export_ignores_region'] else r['region']
+        rows=select_sales(c,Filters(region=region,start_date=r['start_date'],end_date=r['end_date']))
     output=io.StringIO(); writer=csv.writer(output)
     writer.writerow(['id','date','customer','region','product','quantity','unit_price','discount','revenue'])
     for row in rows:
@@ -267,18 +280,17 @@ def export_report(report_id:int,user=Depends(current_user)):
 @app.get('/api/training',tags=['Training'])
 def training(user=Depends(current_user)):
     with db() as c: flags=settings(c)
-    return {'mode':'training' if any(flags.values()) else 'clean','defects':flags}
+    return {'mode':'training' if any(flags.values()) else 'clean','defects':flags,'catalogue':DEFECT_CATALOGUE}
 
-class DefectSettings(StrictModel):
-    exclude_end_date: bool
-    ignore_discounts: bool
-    report_permissions: bool
+# Supplied fields are updated; omitted fields retain their saved values.
+# This keeps older clients sending just the original three flags compatible.
+DefectSettings = create_model('DefectSettings', __base__=StrictModel, **{key: (bool, False) for key in DEFECTS})
 
 @app.put('/api/training/defects',tags=['Training'])
 def set_defects(data:DefectSettings,user=Depends(admin)):
     with db() as c:
-        for k,v in data.model_dump().items(): c.execute('UPDATE settings SET enabled=? WHERE name=?',(int(v),k))
-    return {'defects':data.model_dump()}
+        for k,v in data.model_dump(exclude_unset=True).items(): c.execute('UPDATE settings SET enabled=? WHERE name=?',(int(v),k))
+    with db() as c: return {'defects':settings(c)}
 
 class ResetInput(StrictModel):
     confirmation: Literal['RESET TRAINING DATA']

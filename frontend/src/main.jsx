@@ -21,10 +21,10 @@ import {
 } from "lucide-react";
 import "./style.css";
 const regions = ["Europe", "North America", "Asia Pacific", "Latin America"];
-const money = (n) =>
+const money = (n, currency = "USD") =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency,
     maximumFractionDigits: 0,
   }).format(n);
 const chapters = [
@@ -134,6 +134,9 @@ function App() {
     [end, setEnd] = useState(""),
     [page, setPage] = useState(1),
     [modal, setModal] = useState(null);
+  const uiDefects = data?.training.defects || {};
+  const formatMoney = (n) =>
+    money(n, uiDefects.ui_wrong_currency ? "EUR" : "USD");
   const [email, setEmail] = useState("analyst@atlas.test"),
     [password, setPassword] = useState("Training123!");
   const signOut = () => {
@@ -197,7 +200,7 @@ function App() {
     let active = true;
     setBusy(true);
     const q = new URLSearchParams();
-    if (region) q.set("region", region);
+    if (region && !uiDefects.ui_region_ignored) q.set("region", region);
     if (start) q.set("start_date", start);
     if (end) q.set("end_date", end);
     Promise.all([
@@ -214,7 +217,7 @@ function App() {
     return () => {
       active = false;
     };
-  }, [user, region, start, end, page, version]);
+  }, [user, region, start, end, page, version, uiDefects.ui_region_ignored]);
   async function login(e) {
     e.preventDefault();
     setBusy(true);
@@ -250,6 +253,13 @@ function App() {
     }
   }
   async function save(values) {
+    if (
+      modal.kind === "report" &&
+      modal.row &&
+      uiDefects.ui_report_edit_name_ignored
+    ) {
+      values.name = modal.row.name;
+    }
     let path,
       method = "POST";
     if (modal.kind === "reset") {
@@ -392,7 +402,10 @@ function App() {
     ...(user.role === "admin" ? [["Instructor lab", FlaskConical]] : []),
   ];
   return (
-    <div className="shell">
+    <div
+      className="shell"
+      data-hide-export={!!uiDefects.ui_mobile_export_hidden}
+    >
       <aside>
         <Brand />
         <span className="nav-label">WORKSPACE</span>
@@ -557,7 +570,7 @@ function App() {
                 <button
                   className="text"
                   onClick={() => {
-                    setRegion("");
+                    if (!uiDefects.ui_clear_keeps_region) setRegion("");
                     setStart("");
                     setEnd("");
                     setPage(1);
@@ -579,7 +592,7 @@ function App() {
                 {[
                   [
                     "Net revenue",
-                    money(dashboard.revenue),
+                    formatMoney(dashboard.revenue),
                     "After applied discounts",
                     BarChart3,
                   ],
@@ -597,7 +610,7 @@ function App() {
                   ],
                   [
                     "Average order",
-                    money(dashboard.average_order),
+                    formatMoney(dashboard.average_order),
                     "Net revenue per sale",
                     BarChart3,
                   ],
@@ -632,7 +645,7 @@ function App() {
                     {dashboard.monthly.length ? (
                       dashboard.monthly.map((m) => (
                         <div className="column" key={m.month}>
-                          <span>{money(m.revenue)}</span>
+                          <span>{formatMoney(m.revenue)}</span>
                           <div>
                             <i
                               style={{
@@ -677,7 +690,7 @@ function App() {
                             />
                             {r}
                           </span>
-                          <strong>{money(v)}</strong>
+                          <strong>{formatMoney(v)}</strong>
                         </div>
                         <div className="track">
                           <i
@@ -716,6 +729,7 @@ function App() {
               </div>
               <SalesTable
                 data={sales}
+                defects={uiDefects}
                 compact
                 onMore={() => setView("Sales data")}
               />
@@ -739,6 +753,7 @@ function App() {
               </div>
               <SalesTable
                 data={sales}
+                defects={uiDefects}
                 admin={user.role === "admin"}
                 edit={(r) => setModal({ kind: "sale", row: r })}
                 remove={(r) => setModal({ kind: "delete-sale", row: r })}
@@ -751,7 +766,10 @@ function App() {
                   <button
                     className="secondary"
                     disabled={page === 1 || busy}
-                    onClick={() => setPage((p) => p - 1)}
+                    onClick={() => {
+                      if (!uiDefects.ui_previous_page_stuck)
+                        setPage((p) => p - 1);
+                    }}
                   >
                     <ChevronLeft size={14} />
                     Previous
@@ -759,7 +777,9 @@ function App() {
                   <button
                     className="secondary"
                     disabled={page * 10 >= sales.total || busy}
-                    onClick={() => setPage((p) => p + 1)}
+                    onClick={() => {
+                      if (!uiDefects.ui_next_page_stuck) setPage((p) => p + 1);
+                    }}
                   >
                     Next
                     <ChevronRight size={14} />
@@ -785,7 +805,10 @@ function App() {
                   </p>
                   <small>Created by {r.owner}</small>
                   <div className="report-actions">
-                    <button className="secondary" onClick={() => download(r)}>
+                    <button
+                      className="secondary report-export"
+                      onClick={() => download(r)}
+                    >
                       <Download size={14} />
                       Export CSV
                     </button>
@@ -896,53 +919,58 @@ function App() {
                     active
                   </span>
                 </div>
-                {[
-                  [
-                    "exclude_end_date",
-                    "The missing final day",
-                    "Date filters exclude the final day of a selected range.",
-                  ],
-                  [
-                    "ignore_discounts",
-                    "The inflated total",
-                    "Dashboard revenue ignores discounts applied to sales.",
-                  ],
-                  [
-                    "report_permissions",
-                    "The missing permission check",
-                    "Analysts can delete another user’s report through the API.",
-                  ],
-                ].map(([key, title, desc]) => (
-                  <div className="defect" key={key}>
-                    <div>
-                      <h3>{title}</h3>
-                      <p>{desc}</p>
-                      <code>{key}</code>
-                    </div>
-                    <button
-                      role="switch"
-                      aria-label={title}
-                      aria-checked={data.training.defects[key]}
-                      disabled={busy}
-                      className={
-                        "toggle " + (data.training.defects[key] ? "on" : "")
-                      }
-                      onClick={() =>
-                        act(
-                          () =>
-                            api("/training/defects", {
-                              method: "PUT",
-                              body: JSON.stringify({
-                                ...data.training.defects,
-                                [key]: !data.training.defects[key],
-                              }),
-                            }),
-                          "Defect settings updated.",
-                        )
-                      }
-                    >
-                      <span />
-                    </button>
+                {["API", "UI"].map((area) => (
+                  <div key={area} className="defect-group">
+                    <h3 className="defect-group-heading">
+                      {area} testing · 10 bugs
+                    </h3>
+                    {(data.training.catalogue || [])
+                      .filter((item) => item.area === area)
+                      .map((item) => (
+                        <div className="defect" key={item.key}>
+                          <div>
+                            <h3>
+                              {item.id} · {item.title}
+                            </h3>
+                            <p>{item.description}</p>
+                            <code>{item.key}</code>
+                            <details>
+                              <summary>
+                                Reproduction & expected behavior
+                              </summary>
+                              <p>{item.reproduction}</p>
+                              <p>
+                                <strong>Expected:</strong> {item.expected}
+                              </p>
+                            </details>
+                          </div>
+                          <button
+                            role="switch"
+                            aria-label={item.title}
+                            aria-checked={data.training.defects[item.key]}
+                            disabled={busy}
+                            className={
+                              "toggle " +
+                              (data.training.defects[item.key] ? "on" : "")
+                            }
+                            onClick={() =>
+                              act(
+                                () =>
+                                  api("/training/defects", {
+                                    method: "PUT",
+                                    body: JSON.stringify({
+                                      [item.key]:
+                                        !data.training.defects[item.key],
+                                    }),
+                                  }),
+                                "Defect settings updated.",
+                              )
+                            }
+                          >
+                            <span />
+                          </button>
+                        </div>
+                      ))}
                   </div>
                 ))}
               </section>
@@ -973,12 +1001,25 @@ function App() {
         </main>
       </div>
       {modal && (
-        <Modal modal={modal} close={() => setModal(null)} save={save} />
+        <Modal
+          modal={modal}
+          close={() => setModal(null)}
+          save={save}
+          defects={uiDefects}
+        />
       )}
     </div>
   );
 }
-function SalesTable({ data, compact, admin, onMore, edit, remove }) {
+function SalesTable({
+  data,
+  compact,
+  admin,
+  onMore,
+  edit,
+  remove,
+  defects = {},
+}) {
   return (
     <section className="card">
       <div className="card-heading">
@@ -1026,7 +1067,14 @@ function SalesTable({ data, compact, admin, onMore, edit, remove }) {
                 <td>
                   <span className="region-tag">{r.region}</span>
                 </td>
-                <td className="numeric">{money(r.revenue)}</td>
+                <td className="numeric">
+                  {money(
+                    defects.ui_gross_sale_revenue
+                      ? r.quantity * r.unit_price
+                      : r.revenue,
+                    defects.ui_wrong_currency ? "EUR" : "USD",
+                  )}
+                </td>
                 {!compact && (
                   <>
                     <td>
@@ -1061,7 +1109,7 @@ function SalesTable({ data, compact, admin, onMore, edit, remove }) {
     </section>
   );
 }
-function Modal({ modal, close, save }) {
+function Modal({ modal, close, save, defects = {} }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const { kind, row: r = {} } = modal,
@@ -1268,7 +1316,16 @@ function Modal({ modal, close, save }) {
               type="button"
               className="secondary"
               disabled={busy}
-              onClick={close}
+              onClick={(event) => {
+                if (
+                  (kind === "report" &&
+                    !r.id &&
+                    defects.ui_report_cancel_saves) ||
+                  (kind === "delete-report" && defects.ui_delete_cancel_deletes)
+                ) {
+                  event.currentTarget.form.requestSubmit();
+                } else close();
+              }}
             >
               Cancel
             </button>
