@@ -16,13 +16,9 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from backend.defects import DEFECTS, catalogue
 
 DB_PATH = os.environ.get('ATLAS_DB_PATH', str(Path(__file__).with_name('atlas.sqlite3')))
-DEFECTS = {
-    'exclude_end_date': 'Date filters exclude the last day instead of including it.',
-    'ignore_discounts': 'Dashboard revenue uses gross sales instead of net revenue.',
-    'report_permissions': 'Analysts can delete reports owned by another user.',
-}
 app = FastAPI(title='Atlas Training API', version='1.0.0', description='Sales analytics for UI and API testing. Training-only accounts and synthetic data. See /api/training for the active defect settings.')
 security = HTTPBearer(auto_error=False)
 
@@ -72,6 +68,9 @@ def initialize():
         ''')
         if not c.execute('SELECT 1 FROM users').fetchone():
             seed(c)
+        # Existing instances retain their data, sessions, and active legacy flags.
+        for key in DEFECTS:
+            c.execute('INSERT OR IGNORE INTO settings (name,enabled) VALUES (?,0)', (key,))
 
 initialize()
 
@@ -119,7 +118,8 @@ def me(user=Depends(current_user)):
 @app.post('/api/auth/logout',status_code=204,tags=['Authentication'])
 def logout(credentials=Depends(security),user=Depends(current_user)):
     with db() as c:
-        c.execute('DELETE FROM sessions WHERE token=?',(credentials.credentials,))
+        if not settings(c)['logout_keeps_session']:
+            c.execute('DELETE FROM sessions WHERE token=?',(credentials.credentials,))
     return Response(status_code=204)
 
 Region = Literal['Europe','North America','Asia Pacific','Latin America']
@@ -144,12 +144,13 @@ def settings(c):
 
 def select_sales(c, f):
     clauses, values = [], []
-    if f.region:
+    flags = settings(c)
+    if f.region and not flags['ignore_region_filter']:
         clauses.append('region=?'); values.append(f.region)
     if f.start_date:
         clauses.append('date>=?'); values.append(f.start_date.isoformat())
     if f.end_date:
-        clauses.append('date'+ ('<' if settings(c)['exclude_end_date'] else '<=')+'?'); values.append(f.end_date.isoformat())
+        clauses.append('date'+ ('<' if flags['exclude_end_date'] else '<=')+'?'); values.append(f.end_date.isoformat())
     return [dict(r) for r in c.execute('SELECT * FROM sales'+(' WHERE '+' AND '.join(clauses) if clauses else '')+' ORDER BY date,id', values)]
 
 def net(row):
@@ -162,7 +163,12 @@ def enrich(row):
 def sales(f: Filters=Depends(filters), page:int=Query(1,ge=1), page_size:int=Query(10,ge=1,le=100),user=Depends(current_user)):
     with db() as c:
         rows = select_sales(c,f)
-    return {'items':[enrich(r) for r in rows[(page-1)*page_size:page*page_size]],'total':len(rows),'page':page,'page_size':page_size}
+        flags = settings(c)
+        total = c.execute('SELECT COUNT(*) FROM sales').fetchone()[0] if flags['unfiltered_total'] else len(rows)
+    offset = (page-1)*page_size
+    if flags['overlap_pages'] and page > 1:
+        offset -= 1
+    return {'items':[enrich(r) for r in rows[offset:offset+page_size]],'total':total,'page':page,'page_size':page_size}
 
 class SaleInput(StrictModel):
     date: date
@@ -189,6 +195,10 @@ def get_sale(sale_id:int,user=Depends(current_user)):
 @app.put('/api/sales/{sale_id}',tags=['Sales'])
 def update_sale(sale_id:int,data:SaleInput,user=Depends(admin)):
     with db() as c:
+        if settings(c)['lose_updated_discount']:
+            existing = c.execute('SELECT discount FROM sales WHERE id=?', (sale_id,)).fetchone()
+            if existing:
+                data = data.model_copy(update={'discount': existing['discount']})
         result=c.execute('UPDATE sales SET date=?,customer=?,region=?,product=?,quantity=?,unit_price=?,discount=? WHERE id=?',(*data.model_dump(mode='json').values(),sale_id))
         if not result.rowcount: raise HTTPException(404,'Sale not found')
         return enrich(dict(c.execute('SELECT * FROM sales WHERE id=?',(sale_id,)).fetchone()))
@@ -203,12 +213,14 @@ def delete_sale(sale_id:int,user=Depends(admin)):
 def dashboard(f:Filters=Depends(filters),user=Depends(current_user)):
     with db() as c:
         rows=select_sales(c,f)
-        buggy=settings(c)['ignore_discounts']
+        flags=settings(c)
+        buggy=flags['ignore_discounts']
     revenue=lambda r: r['quantity']*r['unit_price'] if buggy else net(r)
     by_region={r:round(sum(revenue(x) for x in rows if x['region']==r),2) for r in ('Europe','North America','Asia Pacific','Latin America')}
     months=sorted(set(r['date'][:7] for r in rows))
     total=round(sum(revenue(r) for r in rows),2)
-    return {'revenue':total,'orders':len(rows),'customers':len(set(r['customer'] for r in rows)),'average_order':round(total/len(rows),2) if rows else 0,'by_region':by_region,'monthly':[{'month':m,'revenue':round(sum(revenue(r) for r in rows if r['date'].startswith(m)),2)} for m in months]}
+    customers = len(rows) if flags['count_rows_as_customers'] else len(set(r['customer'] for r in rows))
+    return {'revenue':total,'orders':len(rows),'customers':customers,'average_order':round(total/len(rows),2) if rows else 0,'by_region':by_region,'monthly':[{'month':m,'revenue':round(sum(revenue(r) for r in rows if r['date'].startswith(m)),2)} for m in months]}
 
 class ReportInput(Filters):
     name: str = Field(min_length=1,max_length=100,pattern=r'.*\S.*')
@@ -256,7 +268,8 @@ def delete_report(report_id:int,user=Depends(current_user)):
 def export_report(report_id:int,user=Depends(current_user)):
     with db() as c:
         r=report_row(c,report_id)
-        rows=select_sales(c,Filters(region=r['region'],start_date=r['start_date'],end_date=r['end_date']))
+        region = None if settings(c)['export_all_regions'] else r['region']
+        rows=select_sales(c,Filters(region=region,start_date=r['start_date'],end_date=r['end_date']))
     output=io.StringIO(); writer=csv.writer(output)
     writer.writerow(['id','date','customer','region','product','quantity','unit_price','discount','revenue'])
     for row in rows:
@@ -267,12 +280,29 @@ def export_report(report_id:int,user=Depends(current_user)):
 @app.get('/api/training',tags=['Training'])
 def training(user=Depends(current_user)):
     with db() as c: flags=settings(c)
-    return {'mode':'training' if any(flags.values()) else 'clean','defects':flags}
+    return {'mode':'training' if any(flags.values()) else 'clean','defects':flags,'catalogue':catalogue()}
 
 class DefectSettings(StrictModel):
     exclude_end_date: bool
     ignore_discounts: bool
     report_permissions: bool
+    ignore_region_filter: bool = False
+    overlap_pages: bool = False
+    unfiltered_total: bool = False
+    lose_updated_discount: bool = False
+    export_all_regions: bool = False
+    logout_keeps_session: bool = False
+    count_rows_as_customers: bool = False
+    ui_revenue_offset: bool = False
+    ui_orders_from_customers: bool = False
+    ui_wrong_region: bool = False
+    ui_stuck_next_page: bool = False
+    ui_zero_discount: bool = False
+    ui_report_name_prefill: bool = False
+    ui_cancel_deletes: bool = False
+    ui_hide_filter_error: bool = False
+    ui_csv_extension: bool = False
+    ui_escape_ignored: bool = False
 
 @app.put('/api/training/defects',tags=['Training'])
 def set_defects(data:DefectSettings,user=Depends(admin)):
