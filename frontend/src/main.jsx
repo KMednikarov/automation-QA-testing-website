@@ -20,6 +20,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import "./style.css";
+import LearningPath from "./LearningPath.jsx";
 const regions = ["Europe", "North America", "Asia Pacific", "Latin America"];
 const money = (n) =>
   new Intl.NumberFormat("en-US", {
@@ -27,48 +28,6 @@ const money = (n) =>
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(n);
-const chapters = [
-  [
-    "Meet the API",
-    "HTTP methods, status codes, and JSON",
-    "Sign in through the API. Retrieve a page of sales and inspect the response.",
-  ],
-  [
-    "Trust, but verify",
-    "Assertions and response contracts",
-    "Assert required properties, field types, and pagination metadata. Check unknown IDs return 404.",
-  ],
-  [
-    "Create your test data",
-    "Validation and boundaries",
-    "Create a sale as an admin. Try zero quantity, a negative price, and a discount above 100.",
-  ],
-  [
-    "Own the lifecycle",
-    "PUT, DELETE, and persistence",
-    "Create a sale, update its discount, fetch it again, and delete it. Verify it no longer exists.",
-  ],
-  [
-    "Who has access?",
-    "Authentication and permissions",
-    "Check that analysts cannot create sales or delete another user’s report.",
-  ],
-  [
-    "Find the right records",
-    "Filtering and pagination",
-    "Check inclusive date boundaries and verify adjacent pages have no duplicate IDs.",
-  ],
-  [
-    "Follow the numbers",
-    "Aggregation and consistency",
-    "Sum net revenue from every sales page and compare with the dashboard. Remember discounts.",
-  ],
-  [
-    "Tell the whole story",
-    "Workflows and test reporting",
-    "Create a filtered report, export CSV, compare it with the API, and clean up. Report reproducible defects.",
-  ],
-];
 function Brand() {
   return (
     <div className="brand">
@@ -136,6 +95,7 @@ function App() {
     [modal, setModal] = useState(null);
   const [email, setEmail] = useState("analyst@atlas.test"),
     [password, setPassword] = useState("Training123!");
+  const defects = data?.training.defects || {};
   const signOut = () => {
     sessionStorage.removeItem("atlas-token");
     setToken("");
@@ -242,7 +202,7 @@ function App() {
       const url = URL.createObjectURL(await r.blob()),
         a = document.createElement("a");
       a.href = url;
-      a.download = `atlas-report-${report.id}.csv`;
+      a.download = `atlas-report-${report.id}.${defects.ui_csv_extension ? "txt" : "csv"}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -250,6 +210,8 @@ function App() {
     }
   }
   async function save(values) {
+    if (modal.kind === "sale" && defects.ui_zero_discount)
+      values = { ...values, discount: 0 };
     let path,
       method = "POST";
     if (modal.kind === "reset") {
@@ -279,7 +241,7 @@ function App() {
   }
   const messages = (
     <>
-      {error && (
+      {error && !(defects.ui_hide_filter_error && ["Overview", "Sales data"].includes(view)) && (
         <div role="alert" className="alert error">
           {error}
           <button aria-label="Dismiss error" onClick={() => setError("")}>
@@ -482,7 +444,7 @@ function App() {
                     Reports:
                       "Save a perspective. Share the story in your data.",
                     "Learning path":
-                      "Build your testing skills, one discovery at a time.",
+                      "Eight guided API sessions with Postman and Karate.",
                     "Instructor lab":
                       "Set the challenge for your next training session.",
                   }[view]
@@ -520,7 +482,7 @@ function App() {
                 id="region"
                 value={region}
                 onChange={(e) => {
-                  setRegion(e.target.value);
+                  setRegion(defects.ui_wrong_region && e.target.value === "Europe" ? "North America" : e.target.value);
                   setPage(1);
                 }}
               >
@@ -579,13 +541,13 @@ function App() {
                 {[
                   [
                     "Net revenue",
-                    money(dashboard.revenue),
+                    money(dashboard.revenue + (defects.ui_revenue_offset ? 1000 : 0)),
                     "After applied discounts",
                     BarChart3,
                   ],
                   [
                     "Sales orders",
-                    dashboard.orders,
+                    defects.ui_orders_from_customers ? dashboard.customers : dashboard.orders,
                     "Across your selected period",
                     FileText,
                   ],
@@ -703,7 +665,7 @@ function App() {
                   <span className="eyebrow">LEARN BY DOING</span>
                   <h3>Every number has a story. Put it to the test.</h3>
                   <p>
-                    Eight practical chapters. One complete API testing project.
+                    Eight guided sessions. One complete API testing project.
                   </p>
                 </div>
                 <button
@@ -759,7 +721,7 @@ function App() {
                   <button
                     className="secondary"
                     disabled={page * 10 >= sales.total || busy}
-                    onClick={() => setPage((p) => p + 1)}
+                    onClick={() => setPage((p) => defects.ui_stuck_next_page ? p : p + 1)}
                   >
                     Next
                     <ChevronRight size={14} />
@@ -828,45 +790,7 @@ function App() {
               )}
             </div>
           )}
-          {view === "Learning path" && (
-            <>
-              <div className="learning-intro">
-                <div>
-                  <span className="pill">API TESTING / FOUNDATION</span>
-                  <h2>From your first request to a complete test suite.</h2>
-                  <p>
-                    Use the live sales portal as your project. Read each
-                    concept, build the checks, and keep your test suite growing.
-                  </p>
-                </div>
-                <a
-                  className="secondary"
-                  href="/docs"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open API reference
-                  <ArrowRight size={15} />
-                </a>
-              </div>
-              <div className="chapters">
-                {chapters.map(([title, theory, task], i) => (
-                  <section className="card chapter" key={title}>
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    <div>
-                      <span className="eyebrow">{theory}</span>
-                      <h2>{title}</h2>
-                      <p>{task}</p>
-                    </div>
-                  </section>
-                ))}
-              </div>
-              <p className="muted">
-                Find detailed theory, requirements, and instructor guidance in
-                docs/training.md.
-              </p>
-            </>
-          )}
+          {view === "Learning path" && <LearningPath key={user.id} userId={user.id} />}
           {view === "Instructor lab" && user.role === "admin" && data && (
             <>
               <div className="lab-warning">
@@ -896,55 +820,18 @@ function App() {
                     active
                   </span>
                 </div>
-                {[
-                  [
-                    "exclude_end_date",
-                    "The missing final day",
-                    "Date filters exclude the final day of a selected range.",
-                  ],
-                  [
-                    "ignore_discounts",
-                    "The inflated total",
-                    "Dashboard revenue ignores discounts applied to sales.",
-                  ],
-                  [
-                    "report_permissions",
-                    "The missing permission check",
-                    "Analysts can delete another user’s report through the API.",
-                  ],
-                ].map(([key, title, desc]) => (
-                  <div className="defect" key={key}>
-                    <div>
-                      <h3>{title}</h3>
-                      <p>{desc}</p>
-                      <code>{key}</code>
-                    </div>
-                    <button
-                      role="switch"
-                      aria-label={title}
-                      aria-checked={data.training.defects[key]}
-                      disabled={busy}
-                      className={
-                        "toggle " + (data.training.defects[key] ? "on" : "")
-                      }
-                      onClick={() =>
-                        act(
-                          () =>
-                            api("/training/defects", {
-                              method: "PUT",
-                              body: JSON.stringify({
-                                ...data.training.defects,
-                                [key]: !data.training.defects[key],
-                              }),
-                            }),
-                          "Defect settings updated.",
-                        )
-                      }
-                    >
-                      <span />
-                    </button>
-                  </div>
-                ))}
+                <button className="secondary" disabled={busy || !Object.values(defects).some(Boolean)} onClick={() => act(() => api("/training/defects", {
+                  method: "PUT", body: JSON.stringify(Object.fromEntries(Object.keys(defects).map(key => [key, false]))),
+                }), "Clean mode restored. Data and sessions kept.")}>Return to clean mode</button>
+                {[["api", "API challenges", "Use these 10 challenges with the API course."], ["ui", "UI defects", "Ten separate UI switches are available for application testing. The learning path contains API exercises only."]].map(([group, heading, description]) => <section className="defect-group" key={group} aria-label={heading}>
+                  <h3>{heading} · {data.training.catalogue[group].length}</h3><p>{description}</p>
+                  {data.training.catalogue[group].map(({ id, key, title, description }) => <div className="defect" key={key}>
+                    <div><span className="eyebrow">{id}</span><h3>{title}</h3><p>{description}</p><code>{key}</code></div>
+                    <button role="switch" aria-label={`${id}: ${title}`} aria-checked={defects[key]} disabled={busy} className={"toggle " + (defects[key] ? "on" : "")} onClick={() => act(() => api("/training/defects", {
+                      method: "PUT", body: JSON.stringify({ ...defects, [key]: !defects[key] }),
+                    }), "Defect settings updated.")}><span /></button>
+                  </div>)}
+                </section>)}
               </section>
               <div className="card reset">
                 <div>
@@ -973,7 +860,7 @@ function App() {
         </main>
       </div>
       {modal && (
-        <Modal modal={modal} close={() => setModal(null)} save={save} />
+        <Modal modal={modal} close={() => setModal(null)} save={save} defects={defects} />
       )}
     </div>
   );
@@ -1061,7 +948,7 @@ function SalesTable({ data, compact, admin, onMore, edit, remove }) {
     </section>
   );
 }
-function Modal({ modal, close, save }) {
+function Modal({ modal, close, save, defects }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const { kind, row: r = {} } = modal,
@@ -1089,11 +976,11 @@ function Modal({ modal, close, save }) {
   }
   useEffect(() => {
     const listener = (e) => {
-      if (e.key === "Escape" && !busy) close();
+      if (e.key === "Escape" && !busy && !defects.ui_escape_ignored) close();
     };
     document.addEventListener("keydown", listener);
     return () => document.removeEventListener("keydown", listener);
-  }, [busy]);
+  }, [busy, close, defects.ui_escape_ignored]);
   return (
     <div className="overlay">
       <section
@@ -1178,7 +1065,7 @@ function Modal({ modal, close, save }) {
                     name="name"
                     required
                     maxLength="100"
-                    defaultValue={r.name || ""}
+                    defaultValue={r.id && defects.ui_report_name_prefill ? `${r.name} (copy)` : r.name || ""}
                   />
                 </label>
               )}
@@ -1268,7 +1155,12 @@ function Modal({ modal, close, save }) {
               type="button"
               className="secondary"
               disabled={busy}
-              onClick={close}
+              onClick={async () => {
+                if (deletion && defects.ui_cancel_deletes) {
+                  setBusy(true);
+                  try { await save({}); } finally { setBusy(false); }
+                } else close();
+              }}
             >
               Cancel
             </button>

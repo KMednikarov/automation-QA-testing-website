@@ -2,7 +2,8 @@ name: Portal checks
 on: [push, pull_request]
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # Pin the OS supported by the locked browser version.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,3 +16,52 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: bash scripts/setup.sh
       - run: .venv/bin/python -m pytest backend/tests -q
+      - run: npm run lint --prefix frontend
+      - run: node scripts/export-course.mjs --check
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:browser --prefix frontend
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: atlas-browser-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+  karate:
+    # Pin the OS supported by the locked browser version.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Prepare API
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r backend/requirements.lock
+      - name: Start dedicated clean API and wait for readiness
+        run: |
+          ATLAS_DB_PATH="$RUNNER_TEMP/atlas-karate.sqlite3" .venv/bin/python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 > atlas-api.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/api/health; then exit 0; fi
+            sleep 1
+          done
+          cat atlas-api.log
+          exit 1
+      - name: Run learner API suite
+        run: mvn --batch-mode -f training/karate/pom.xml test
+      - name: Preserve Karate reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-karate-reports
+          path: |
+            training/karate/target/karate-reports/
+            training/karate/target/surefire-reports/
+            atlas-api.log
