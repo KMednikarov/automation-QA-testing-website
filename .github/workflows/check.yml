@@ -2,7 +2,8 @@ name: Portal checks
 on: [push, pull_request]
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    # Pin the OS supported by the locked browser version.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,7 +29,8 @@ jobs:
             frontend/playwright-report/
             frontend/test-results/
   karate:
-    runs-on: ubuntu-latest
+    # Pin the OS supported by the locked browser version.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
